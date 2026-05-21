@@ -10,9 +10,15 @@ function [x, lambda] = EqualityQPSolverLDLsparse(H, g, A, b)
     d = - [g; b];
     
     % Solve using LDL-factorization
+    % As per slides
     z = zeros(n+m,1);
     [L,D,p] = ldl(K,"lower","vector");
     z(p) = L' \ (D \ (L \ d(p) ) );
+    
+    % As per book
+    %[L, D, P] = ldl(K, "lower");   
+    %z = P * (L' \ (D \ (L \ (P' * d))));
+
     
     x = z(1:n);
     lambda = z(n+1:end);
