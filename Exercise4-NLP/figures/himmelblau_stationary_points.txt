@@ -1,0 +1,11 @@
+Stationary points for Himmelblau function
+
+x = [-3.77931025 -3.28318599], f(x) = 0.000000, type = local minimum
+x = [-2.80511809  3.13131252], f(x) = 0.000000, type = local minimum
+x = [-3.07302575 -0.08135304], f(x) = 104.015163, type = saddle point
+x = [-0.12796135 -1.95371498], f(x) = 178.337239, type = saddle point
+x = [-0.27084459 -0.92303856], f(x) = 181.616522, type = local maximum
+x = [0.0866775 2.8842547], f(x) = 67.719150, type = saddle point
+x = [3. 2.], f(x) = 0.000000, type = local minimum
+x = [ 3.58442834 -1.84812653], f(x) = 0.000000, type = local minimum
+x = [3.38515418 0.07385188], f(x) = 13.311926, type = saddle point
