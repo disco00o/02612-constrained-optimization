@@ -3,3 +3,5 @@ Matlab/EQP_visualizer.m
 Exercise4-NLP/solvers.py
 Matlab/plotEQPgrad.m
 Matlab/plotEQP.m
+.vscode/settings.json
+*.pyc
