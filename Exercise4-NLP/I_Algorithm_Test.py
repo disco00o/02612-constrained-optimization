@@ -4,16 +4,14 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from scipy.optimize import minimize, Bounds
+from scipy.optimize import minimize, Bounds, LinearConstraint
 
 
 FIGURE_DIR = "Exercise4-NLP/figures"
 os.makedirs(FIGURE_DIR, exist_ok=True)
 
+BIG = 1e20
 
-# ============================================================
-# Test Problems
-# ============================================================
 
 def himmelblau(x):
     x1, x2 = x
@@ -36,15 +34,48 @@ def hess_himmelblau(x):
     ])
 
 
-def rosenbrock(x):
-    return 100 * (x[1] - x[0]**2)**2 + (1 - x[0])**2
+def c_himmelblau(x):
+    x1, x2 = x
+    return np.array([
+        (x1 + 2)**2 - x2,
+        -4 * x1 + 10 * x2
+    ])
 
 
-# ============================================================
-# QP Solvers Used Inside SQP
-# ============================================================
+def jac_c_himmelblau(x):
+    x1, x2 = x
+    return np.array([
+        [2 * (x1 + 2), -1.0],
+        [-4.0, 10.0]
+    ])
 
-def solve_qp_subproblem(xk, Hk, grad_fk, xl, xu):
+
+def constraint_violation(g_fun, x, gl, gu):
+    if g_fun is None:
+        return 0.0
+
+    gx = g_fun(x)
+    lower_violation = np.maximum(gl - gx, 0.0)
+    upper_violation = np.maximum(gx - gu, 0.0)
+
+    return np.sum(lower_violation + upper_violation)
+
+
+def merit_function(f_fun, g_fun, x, gl, gu, penalty):
+    return f_fun(x) + penalty * constraint_violation(g_fun, x, gl, gu)
+
+
+def solve_qp_subproblem(
+    xk,
+    Hk,
+    grad_fk,
+    xl,
+    xu,
+    g_fun=None,
+    jac_g_fun=None,
+    gl=None,
+    gu=None
+):
     n = len(xk)
 
     def qp_obj(p):
@@ -55,19 +86,49 @@ def solve_qp_subproblem(xk, Hk, grad_fk, xl, xu):
 
     bounds = Bounds(xl - xk, xu - xk)
 
+    constraints = []
+
+    if g_fun is not None and jac_g_fun is not None:
+        gk = g_fun(xk)
+        Jgk = jac_g_fun(xk)
+
+        constraints.append(
+            LinearConstraint(
+                Jgk,
+                gl - gk,
+                gu - gk
+            )
+        )
+
     res = minimize(
         fun=qp_obj,
         x0=np.zeros(n),
         jac=qp_grad,
         bounds=bounds,
+        constraints=constraints,
         method="SLSQP",
-        options={"ftol": 1e-12, "maxiter": 200}
+        options={
+            "ftol": 1e-12,
+            "maxiter": 300,
+            "disp": False
+        }
     )
 
     return res.x
 
 
-def solve_trust_region_qp(xk, Hk, grad_fk, xl, xu, delta):
+def solve_trust_region_qp(
+    xk,
+    Hk,
+    grad_fk,
+    xl,
+    xu,
+    delta,
+    g_fun=None,
+    jac_g_fun=None,
+    gl=None,
+    gu=None
+):
     n = len(xk)
 
     def qp_obj(p):
@@ -86,6 +147,18 @@ def solve_trust_region_qp(xk, Hk, grad_fk, xl, xu, delta):
         }
     ]
 
+    if g_fun is not None and jac_g_fun is not None:
+        gk = g_fun(xk)
+        Jgk = jac_g_fun(xk)
+
+        constraints.append(
+            LinearConstraint(
+                Jgk,
+                gl - gk,
+                gu - gk
+            )
+        )
+
     res = minimize(
         fun=qp_obj,
         x0=np.zeros(n),
@@ -93,45 +166,97 @@ def solve_trust_region_qp(xk, Hk, grad_fk, xl, xu, delta):
         bounds=bounds,
         constraints=constraints,
         method="SLSQP",
-        options={"ftol": 1e-12, "maxiter": 200}
+        options={
+            "ftol": 1e-12,
+            "maxiter": 300,
+            "disp": False
+        }
     )
 
     return res.x
 
 
-# ============================================================
-# Simplified SQP Implementations
-# ============================================================
-
-def line_search_sqp(x0, xl, xu, max_iter=100, tol=1e-8):
+def line_search_sqp(
+    f_fun,
+    grad_f_fun,
+    hess_f_fun,
+    x0,
+    xl,
+    xu,
+    g_fun=None,
+    jac_g_fun=None,
+    gl=None,
+    gu=None,
+    max_iter=100,
+    tol=1e-8,
+    penalty=100.0
+):
     xk = np.asarray(x0, dtype=float)
+    xl = np.asarray(xl, dtype=float)
+    xu = np.asarray(xu, dtype=float)
 
-    history = {"f": []}
+    history = {
+        "f": [],
+        "constraint_violation": []
+    }
 
     for _ in range(max_iter):
-        fk = himmelblau(xk)
-        grad_fk = grad_himmelblau(xk)
-        Hk = hess_himmelblau(xk)
+        fk = f_fun(xk)
+        grad_fk = grad_f_fun(xk)
+        Hk = hess_f_fun(xk)
+
+        violation = constraint_violation(g_fun, xk, gl, gu)
 
         history["f"].append(fk)
+        history["constraint_violation"].append(violation)
 
-        if np.linalg.norm(grad_fk) < tol:
+        if np.linalg.norm(grad_fk) < tol and violation < tol:
             break
 
         eig_min = np.min(np.linalg.eigvalsh(Hk))
+
         if eig_min <= 1e-8:
             Hk = Hk + (abs(eig_min) + 1e-4) * np.eye(len(xk))
 
-        pk = solve_qp_subproblem(xk, Hk, grad_fk, xl, xu)
+        pk = solve_qp_subproblem(
+            xk=xk,
+            Hk=Hk,
+            grad_fk=grad_fk,
+            xl=xl,
+            xu=xu,
+            g_fun=g_fun,
+            jac_g_fun=jac_g_fun,
+            gl=gl,
+            gu=gu
+        )
 
         alpha = 1.0
         rho = 0.5
         c1 = 1e-4
 
-        while alpha > 1e-12:
-            x_trial = np.minimum(np.maximum(xk + alpha * pk, xl), xu)
+        current_merit = merit_function(
+            f_fun,
+            g_fun,
+            xk,
+            gl,
+            gu,
+            penalty
+        )
 
-            if himmelblau(x_trial) <= fk + c1 * alpha * grad_fk @ pk:
+        while alpha > 1e-12:
+            x_trial = xk + alpha * pk
+            x_trial = np.minimum(np.maximum(x_trial, xl), xu)
+
+            trial_merit = merit_function(
+                f_fun,
+                g_fun,
+                x_trial,
+                gl,
+                gu,
+                penalty
+            )
+
+            if trial_merit <= current_merit - c1 * alpha * np.linalg.norm(pk)**2:
                 break
 
             alpha *= rho
@@ -144,13 +269,20 @@ def line_search_sqp(x0, xl, xu, max_iter=100, tol=1e-8):
 
         xk = x_next
 
-    return xk, himmelblau(xk), history
+    return xk, f_fun(xk), history
 
 
 def trust_region_sqp(
+    f_fun,
+    grad_f_fun,
+    hess_f_fun,
     x0,
     xl,
     xu,
+    g_fun=None,
+    jac_g_fun=None,
+    gl=None,
+    gu=None,
     max_iter=100,
     tol=1e-8,
     delta0=1.0,
@@ -158,30 +290,54 @@ def trust_region_sqp(
     eta=0.1
 ):
     xk = np.asarray(x0, dtype=float)
+    xl = np.asarray(xl, dtype=float)
+    xu = np.asarray(xu, dtype=float)
+
     delta = delta0
 
-    history = {"f": [], "delta": []}
+    history = {
+        "f": [],
+        "constraint_violation": [],
+        "delta": []
+    }
 
     for _ in range(max_iter):
-        fk = himmelblau(xk)
-        grad_fk = grad_himmelblau(xk)
-        Hk = hess_himmelblau(xk)
+        fk = f_fun(xk)
+        grad_fk = grad_f_fun(xk)
+        Hk = hess_f_fun(xk)
+
+        violation = constraint_violation(g_fun, xk, gl, gu)
 
         history["f"].append(fk)
+        history["constraint_violation"].append(violation)
         history["delta"].append(delta)
 
-        if np.linalg.norm(grad_fk) < tol:
+        if np.linalg.norm(grad_fk) < tol and violation < tol:
             break
 
         eig_min = np.min(np.linalg.eigvalsh(Hk))
+
         if eig_min <= 1e-8:
             Hk = Hk + (abs(eig_min) + 1e-4) * np.eye(len(xk))
 
-        pk = solve_trust_region_qp(xk, Hk, grad_fk, xl, xu, delta)
+        pk = solve_trust_region_qp(
+            xk=xk,
+            Hk=Hk,
+            grad_fk=grad_fk,
+            xl=xl,
+            xu=xu,
+            delta=delta,
+            g_fun=g_fun,
+            jac_g_fun=jac_g_fun,
+            gl=gl,
+            gu=gu
+        )
 
         predicted = -(grad_fk @ pk + 0.5 * pk @ Hk @ pk)
+
         x_trial = np.minimum(np.maximum(xk + pk, xl), xu)
-        actual = fk - himmelblau(x_trial)
+
+        actual = fk - f_fun(x_trial)
 
         rho = 0.0 if predicted <= 1e-12 else actual / predicted
 
@@ -197,31 +353,46 @@ def trust_region_sqp(
 
         if (
             np.linalg.norm(x_next - xk) < tol
-            or np.linalg.norm(grad_himmelblau(x_next)) < tol
+            or np.linalg.norm(grad_f_fun(x_next)) < tol
         ):
             xk = x_next
             break
 
         xk = x_next
 
-    return xk, himmelblau(xk), history
+    return xk, f_fun(xk), history
 
 
-# ============================================================
-# Solver Wrappers
-# ============================================================
-
-def solve_with_library(problem, x0, bounds):
+def solve_with_library(problem):
     start = time.perf_counter()
 
+    scipy_constraints = []
+
+    if problem["g"] is not None:
+        scipy_constraints.append(
+            {
+                "type": "ineq",
+                "fun": lambda x, problem=problem: problem["g"](x) - problem["gl"],
+                "jac": lambda x, problem=problem: problem["jac_g"](x)
+            }
+        )
+
+        scipy_constraints.append(
+            {
+                "type": "ineq",
+                "fun": lambda x, problem=problem: problem["gu"] - problem["g"](x),
+                "jac": lambda x, problem=problem: -problem["jac_g"](x)
+            }
+        )
+
     res = minimize(
-        fun=problem,
-        x0=x0,
+        fun=problem["f"],
+        x0=problem["x0"],
+        jac=problem["grad_f"],
+        hess=problem["hess_f"],
         method="trust-constr",
-        bounds=Bounds(
-            np.array([b[0] for b in bounds]),
-            np.array([b[1] for b in bounds])
-        ),
+        bounds=Bounds(problem["xl"], problem["xu"]),
+        constraints=scipy_constraints,
         options={"maxiter": 1000}
     )
 
@@ -236,16 +407,20 @@ def solve_with_library(problem, x0, bounds):
     }
 
 
-def run_line_search_sqp(problem, x0, bounds):
+def run_line_search_sqp(problem):
     start = time.perf_counter()
 
-    xl = np.array([b[0] for b in bounds])
-    xu = np.array([b[1] for b in bounds])
-
     x_star, f_star, history = line_search_sqp(
-        x0=x0,
-        xl=xl,
-        xu=xu
+        f_fun=problem["f"],
+        grad_f_fun=problem["grad_f"],
+        hess_f_fun=problem["hess_f"],
+        x0=problem["x0"],
+        xl=problem["xl"],
+        xu=problem["xu"],
+        g_fun=problem["g"],
+        jac_g_fun=problem["jac_g"],
+        gl=problem["gl"],
+        gu=problem["gu"]
     )
 
     cpu_time = time.perf_counter() - start
@@ -259,16 +434,20 @@ def run_line_search_sqp(problem, x0, bounds):
     }
 
 
-def run_trust_region_sqp(problem, x0, bounds):
+def run_trust_region_sqp(problem):
     start = time.perf_counter()
 
-    xl = np.array([b[0] for b in bounds])
-    xu = np.array([b[1] for b in bounds])
-
     x_star, f_star, history = trust_region_sqp(
-        x0=x0,
-        xl=xl,
-        xu=xu
+        f_fun=problem["f"],
+        grad_f_fun=problem["grad_f"],
+        hess_f_fun=problem["hess_f"],
+        x0=problem["x0"],
+        xl=problem["xl"],
+        xu=problem["xu"],
+        g_fun=problem["g"],
+        jac_g_fun=problem["jac_g"],
+        gl=problem["gl"],
+        gu=problem["gu"]
     )
 
     cpu_time = time.perf_counter() - start
@@ -282,23 +461,20 @@ def run_trust_region_sqp(problem, x0, bounds):
     }
 
 
-# ============================================================
-# Main Experiment
-# ============================================================
-
 if __name__ == "__main__":
 
     problems = {
-        "Himmelblau": {
-            "func": himmelblau,
+        "Constrained Himmelblau": {
+            "f": himmelblau,
+            "grad_f": grad_himmelblau,
+            "hess_f": hess_himmelblau,
             "x0": np.array([0.0, 0.0]),
-            "bounds": [(-5, 5), (-5, 5)]
-        },
-
-        "Rosenbrock": {
-            "func": rosenbrock,
-            "x0": np.array([-1.2, 1.0]),
-            "bounds": [(-5, 5), (-5, 5)]
+            "xl": np.array([-5.0, -5.0]),
+            "xu": np.array([5.0, 5.0]),
+            "g": c_himmelblau,
+            "jac_g": jac_c_himmelblau,
+            "gl": np.array([0.0, 0.0]),
+            "gu": np.array([BIG, BIG])
         }
     }
 
@@ -310,20 +486,17 @@ if __name__ == "__main__":
 
     all_results = []
 
-    for problem_name, data in problems.items():
+    for problem_name, problem in problems.items():
 
         print(f"\nRunning problem: {problem_name}")
         print("=" * 60)
 
         for solver in solvers:
 
-            result = solver(
-                data["func"],
-                data["x0"],
-                data["bounds"]
-            )
+            result = solver(problem)
 
             result["problem"] = problem_name
+
             all_results.append(result)
 
             print(result)
@@ -338,42 +511,16 @@ if __name__ == "__main__":
         index=False
     )
 
-    # ========================================================
-    # Improved CPU Time Plot
-    # ========================================================
+    plt.figure(figsize=(8, 5))
 
-    plt.figure(figsize=(10, 5))
-
-    problem_names = df["problem"].unique()
-    solver_names = df["solver"].unique()
-
-    x = np.arange(len(solver_names))
-    width = 0.35
-
-    for i, problem_name in enumerate(problem_names):
-
-        subset = df[df["problem"] == problem_name]
-
-        cpu_times = [
-            subset[subset["solver"] == solver]["cpu_time"].values[0]
-            for solver in solver_names
-        ]
-
-        plt.bar(
-            x + i * width,
-            cpu_times,
-            width=width,
-            label=problem_name
-        )
-
-    plt.xticks(
-        x + width / 2,
-        solver_names
+    plt.bar(
+        df["solver"],
+        df["cpu_time"]
     )
 
     plt.ylabel("CPU Time [s]")
     plt.title("NLP Solver CPU Time Comparison")
-    plt.legend()
+    plt.xticks(rotation=15)
     plt.tight_layout()
 
     plt.savefig(
