@@ -1,68 +1,33 @@
 import numpy as np
-from scipy.optimize import minimize, Bounds
-
+import time
+from scipy.optimize import minimize
 
 def himmelblau(x):
     x1, x2 = x
     return (x1**2 + x2 - 11)**2 + (x1 + x2**2 - 7)**2
 
-
 def grad_himmelblau(x):
     x1, x2 = x
+    df_dx1 = 4 * x1 * (x1**2 + x2 - 11) + 2 * (x1 + x2**2 - 7)
+    df_dx2 = 2 * (x1**2 + x2 - 11) + 4 * x2 * (x1 + x2**2 - 7)
+    return np.array([df_dx1, df_dx2])
 
-    return np.array([
-        4 * x1 * (x1**2 + x2 - 11) + 2 * (x1 + x2**2 - 7),
-        2 * (x1**2 + x2 - 11) + 4 * x2 * (x1 + x2**2 - 7)
-    ])
+constraints = [
+    {'type': 'ineq', 'fun': lambda x: (x[0] + 2)**2 - x[1]},
+    {'type': 'ineq', 'fun': lambda x: -4 * x[0] + 10 * x[1]}
+]
 
+points = []
 
-def hess_himmelblau(x):
-    x1, x2 = x
-
-    return np.array([
-        [12 * x1**2 + 4 * x2 - 42, 4 * x1 + 4 * x2],
-        [4 * x1 + 4 * x2, 4 * x1 + 12 * x2**2 - 26]
-    ])
-
-
-if __name__ == "__main__":
-
-    bounds = Bounds(
-        lb=np.array([-5.0, -5.0]),
-        ub=np.array([5.0, 5.0])
-    )
-
-    starting_points = [
-        np.array([0.0, 0.0]),
-        np.array([4.0, 4.0]),
-        np.array([-4.0, 4.0]),
-        np.array([-4.0, -4.0]),
-        np.array([4.0, -4.0]),
-    ]
-
-    print("Library NLP solver results for box-constrained Himmelblau problem")
-    print("=" * 70)
-
-    for x0 in starting_points:
-        res = minimize(
-            fun=himmelblau,
-            x0=x0,
+t1 = time.time()
+res = minimize(
+            himmelblau,
+            np.array([0, 0]),
+            method='SLSQP',
             jac=grad_himmelblau,
-            hess=hess_himmelblau,
-            bounds=bounds,
-            method="trust-constr",
-            options={
-                "gtol": 1e-10,
-                "xtol": 1e-10,
-                "maxiter": 1000,
-                "verbose": 0,
-            }
-        )
+            constraints=constraints)
+t2 = time.time()
 
-        print(f"Initial point:   {x0}")
-        print(f"Solution:        {res.x}")
-        print(f"Objective value: {res.fun:.10e}")
-        print(f"Iterations:      {res.niter}")
-        print(f"Success:         {res.success}")
-        print(f"Message:         {res.message}")
-        print("-" * 70)
+print(f"x = {res.x}, f(x) = {himmelblau(res.x):.6f}")
+print(f"Number of iterations: {res.nit}")
+print(f"Time: {t2-t1} seconds")

@@ -2,6 +2,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import root
+from matplotlib.lines import Line2D
 
 
 FIGURE_DIR = "Exercise4-NLP/figures"
@@ -70,6 +71,14 @@ def classify_stationary_point(x):
         return "saddle point"
 
 
+def is_feasible(x, tol=1e-6):
+    x1, x2 = x
+    c1 = (x1 + 2)**2 - x2 >= -tol
+    c2 = -4 * x1 + 10 * x2 >= -tol
+    
+    return c1 and c2
+
+
 def find_stationary_points():
 
     guesses = []
@@ -94,12 +103,15 @@ def find_stationary_points():
 
             x_star = sol.x
 
-            # Avoid duplicates
-            if not any(
-                np.linalg.norm(x_star - p) < 1e-6
-                for p in points
-            ):
-                points.append(x_star)
+            # Only add the point if it falls within the feasible region
+            if is_feasible(x_star):
+                
+                # Avoid duplicates
+                if not any(
+                    np.linalg.norm(x_star - p) < 1e-6
+                    for p in points
+                ):
+                    points.append(x_star)
 
     return points
 
@@ -122,7 +134,8 @@ def plot_himmelblau(points):
         X1,
         X2,
         Z,
-        levels=50
+        levels=50,
+        alpha=0.6
     )
 
     plt.clabel(
@@ -130,6 +143,15 @@ def plot_himmelblau(points):
         inline=True,
         fontsize=8
     )
+
+    C1 = (X1 + 2)**2 - X2
+    C2 = -4 * X1 + 10 * X2
+
+    plt.contourf(X1, X2, C1, levels=[-np.inf, 0], colors='gray', alpha=0.3)
+    plt.contourf(X1, X2, C2, levels=[-np.inf, 0], colors='gray', alpha=0.3)
+    
+    plt.contour(X1, X2, C1, levels=[0], colors='black', linestyles='dashed', linewidths=1.5)
+    plt.contour(X1, X2, C2, levels=[0], colors='black', linestyles='dashed', linewidths=1.5)
 
     colors = {
         "local minimum": "tab:blue",
@@ -153,32 +175,38 @@ def plot_himmelblau(points):
             marker=markers[point_type],
             color=colors[point_type],
             s=100,
-            label=point_type
+            label=point_type,
+            zorder=5
         )
 
     plt.xlabel(r"$x_1$")
     plt.ylabel(r"$x_2$")
 
-    plt.title(
-        "Himmelblau Function: Contours and Stationary Points"
-    )
-
     plt.grid(True)
 
-    # Remove duplicate legend labels
+    # Remove duplicate legend labels for points and add constraints
     handles, labels = plt.gca().get_legend_handles_labels()
-
     unique = dict(zip(labels, handles))
+    
+    constraint_handles = [
+        Line2D([0], [0], color='black', linestyle='dashed', lw=1.5, label=r'$(x_1+2)^2 - x_2 \geq 0$'),
+        Line2D([0], [0], color='black', linestyle='dashed', lw=1.5, label=r'$-4x_1 + 10x_2 \geq 0$')
+    ]
+    
+    all_handles = list(unique.values()) + constraint_handles
+    all_labels = list(unique.keys()) + [h.get_label() for h in constraint_handles]
 
     plt.legend(
-        unique.values(),
-        unique.keys()
+        all_handles,
+        all_labels,
+        loc='upper right',
+        fontsize=9
     )
 
     plt.tight_layout()
 
     plt.savefig(
-        f"{FIGURE_DIR}/himmelblau_contour_stationary_points.png",
+        f"{FIGURE_DIR}/himmelblau_constrained_stationary_points.png",
         dpi=300,
         bbox_inches="tight"
     )
@@ -190,7 +218,7 @@ if __name__ == "__main__":
 
     points = find_stationary_points()
 
-    print("Stationary points:\n")
+    print("Feasible Stationary points:\n")
 
     for p in points:
 
@@ -201,12 +229,12 @@ if __name__ == "__main__":
         )
 
     with open(
-        f"{FIGURE_DIR}/himmelblau_stationary_points.txt",
+        f"{FIGURE_DIR}/himmelblau_constrained_stationary_points.txt",
         "w"
     ) as f:
 
         f.write(
-            "Stationary points for Himmelblau function\n\n"
+            "Feasible stationary points for Himmelblau function\n\n"
         )
 
         for p in points:
