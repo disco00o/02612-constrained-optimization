@@ -40,10 +40,20 @@ def primal_dual_interior_point(H, g, A, b_lower, b_upper, x_lower, x_upper, x0):
         iter += 1
 
         # affine step
-        Hbar = H + A.T @ sparse.diags(z / s) @ A
+        H = sparse.csr_matrix(H)
+        A = sparse.csr_matrix(A)
+        D = sparse.diags(z / s)
 
-        # Make sure Hbar is positive definite by adding a small multiple of the identity matrix
-        Hbar = Hbar + 1e-8 * sparse.eye(Hbar.shape[0])
+        Hbar = H + A.T @ D @ A
+        Hbar = Hbar + 1e-8 * sparse.eye(Hbar.shape[0], format="csc")
+
+        # Ensure CSC format for spsolve
+        Hbar = Hbar.tocsc()
+
+        # Hbar = H + A.T @ sparse.diags(z / s) @ A
+
+        # # Make sure Hbar is positive definite by adding a small multiple of the identity matrix
+        # Hbar = Hbar + 1e-8 * sparse.eye(Hbar.shape[0])
 
         rLbar = rL - A.T @ ((z / s) * (rA - rsz / z))
 

@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from scipy.optimize import minimize, Bounds, NonlinearConstraint
-from SQP import line_search_sqp, tr_sqp
+from SQP import line_search_sqp, tr_sqp, ConstraintSet, unpack_constraints
 from scipy.optimize import minimize, Bounds
 import time
 
@@ -25,23 +25,23 @@ def plot_convergence_compare(hist_exact, hist_bfgs):
     plt.show()
 
 
-def plot_paths(hist_exact, hist_bfgs):
+def plot_paths(hist_exact, hist_bfgs, constraints):
     xs_exact = np.array(hist_exact["x"])
     xs_bfgs  = np.array(hist_bfgs["x"])
 
     plt.figure(figsize=(7,6))
 
-    # --- Rosenbrock contours ---
+    # Rosenbrock contours
     x1 = np.linspace(-2, 2, 400)
     x2 = np.linspace(-1, 3, 400)
     X1, X2 = np.meshgrid(x1, x2)
     Z = (1 - X1)**2 + 100*(X2 - X1**2)**2
     plt.contour(X1, X2, Z, levels=50, cmap="viridis")
 
-    # --- Constraints (same as before) ---
-    c1 = (X1 + 2)**2 - X2
-    c2 = -4*X1 + 10*X2
-    infeasible = (c1 < 0) | (c2 < 0)
+    # Generic infeasible region
+    infeasible = np.zeros_like(X1, dtype=bool)
+    for ci in constraints.funcs:
+        infeasible |= (ci(np.array([X1, X2])) < 0)
 
     plt.imshow(
         infeasible.astype(int),
@@ -51,7 +51,7 @@ def plot_paths(hist_exact, hist_bfgs):
         cmap="Reds"
     )
 
-    # --- Paths ---
+    # Paths
     plt.plot(xs_exact[:,0], xs_exact[:,1], "o-", label="Exact Hessian")
     plt.plot(xs_bfgs[:,0],  xs_bfgs[:,1],  "s-", label="BFGS")
 
@@ -109,19 +109,55 @@ def hess_c_rosenbrock(x):
     Hc2 = np.zeros((2, 2))
     return np.array([Hc1, Hc2])
 
+rosen_constraints = ConstraintSet(
+    funcs=[
+        lambda x: (x[0] + 2)**2 - x[1],
+        lambda x: -4*x[0] + 10*x[1]
+    ],
+    jacs=[
+        lambda x: np.array([2*(x[0]+2), -1]),
+        lambda x: np.array([-4, 10])
+    ],
+    hessians=[
+        lambda x: np.array([[2,0],[0,0]]),
+        lambda x: np.zeros((2,2))
+    ],
+    gl=[0.0, 0.0],
+    gu=[np.inf, np.inf]
+)
+
+
+circle = ConstraintSet(
+    funcs=[lambda x: x[0]**2 + x[1]**2 - 1],
+    jacs=[lambda x: np.array([2*x[0], 2*x[1]])],
+    hessians=[lambda x: np.array([[2,0],[0,2]])],
+    gl=[0],
+    gu=[np.inf]
+)
+
+inverted_circle = ConstraintSet(
+    funcs=[lambda x: -(x[0]**2 + x[1]**2 - 1)],
+    jacs=[lambda x: np.array([-2*x[0], -2*x[1]])],
+    hessians=[lambda x: np.array([[-2,0],[0,-2]])],
+    gl=[0],
+    gu=[np.inf]
+)
+
+
+
+
 import casadi as ca
 import numpy as np
 
-def solve_with_ipopt(x0, gl, gu):
-    x = ca.MX.sym('x', 2)
+def solve_with_ipopt(x0, constraints, xl, xu):
+    x = ca.MX.sym('x', len(x0))
 
     # Objective
     f = (1 - x[0])**2 + 100*(x[1] - x[0]**2)**2
 
-    # Constraints
-    g1 = (x[0] + 2)**2 - x[1]
-    g2 = -4*x[0] + 10*x[1]
-    g = ca.vertcat(g1, g2)
+    # Constraints from ConstraintSet
+    g_list = [ci(x) for ci in constraints.funcs]
+    g = ca.vertcat(*g_list)
 
     nlp = {'x': x, 'f': f, 'g': g}
 
@@ -132,36 +168,31 @@ def solve_with_ipopt(x0, gl, gu):
 
     sol = solver(
         x0=x0,
-        lbx=[-2, -1],
-        ubx=[ 2,  3],
-        lbg=gl,
-        ubg=gu
+        lbx=xl,
+        ubx=xu,
+        lbg=constraints.gl,
+        ubg=constraints.gu
     )
 
     return np.array(sol['x']).flatten(), float(sol['f'])
 
 from scipy.optimize import minimize, NonlinearConstraint, Bounds
 
-def solve_with_trust_constr(x0):
+def solve_with_trust_constr(x0, constraints, xl, xu):
     def f(x):
         return (1-x[0])**2 + 100*(x[1]-x[0]**2)**2
 
     def g(x):
-        return np.array([
-            (x[0]+2)**2 - x[1],
-            -4*x[0] + 10*x[1]
-        ])
+        return constraints.c(x)
 
     def Jg(x):
-        return np.array([
-            [2*(x[0]+2), -1],
-            [-4, 10]
-        ])
+        return constraints.jac(x)
 
-    cons = NonlinearConstraint(g, [0,0], [np.inf, np.inf], jac=Jg)
-    bounds = Bounds([-2,-1], [2,3])
+    cons = NonlinearConstraint(g, constraints.gl, constraints.gu, jac=Jg)
+    bounds = Bounds(xl, xu)
 
-    res = minimize(f, x0, method='trust-constr', constraints=[cons], bounds=bounds)
+    res = minimize(f, x0, method='trust-constr',
+                   constraints=[cons], bounds=bounds)
     return res.x, res.fun
 
 def plot_cpu_times(time_tr_exact, time_tr_bfgs, time_ls_exact, time_ls_bfgs):
@@ -198,7 +229,7 @@ def plot_cpu_times(time_tr_exact, time_tr_bfgs, time_ls_exact, time_ls_bfgs):
     plt.grid(axis="y", linestyle="--", alpha=0.6)
     plt.tight_layout()
     plt.show()
-    
+
 def plot_cpu_times_extended(times_dict):
     labels = list(times_dict.keys())
     times  = list(times_dict.values())
@@ -219,7 +250,7 @@ def plot_cpu_times_extended(times_dict):
     plt.tight_layout()
     plt.show()
 
-def plot_final_solutions_extended(solutions):
+def plot_final_solutions_extended(solutions, constraints):
     plt.figure(figsize=(7,6))
 
     # Rosenbrock contours
@@ -229,10 +260,10 @@ def plot_final_solutions_extended(solutions):
     Z = (1 - X1)**2 + 100*(X2 - X1**2)**2
     plt.contour(X1, X2, Z, levels=50, cmap="viridis")
 
-    # Constraints
-    c1 = (X1 + 2)**2 - X2
-    c2 = -4*X1 + 10*X2
-    infeasible = (c1 < 0) | (c2 < 0)
+    # Generic infeasible region from ConstraintSet
+    infeasible = np.zeros_like(X1, dtype=bool)
+    for ci in constraints.funcs:
+        infeasible |= (ci(np.array([X1, X2])) < 0)
 
     plt.imshow(
         infeasible.astype(int),
@@ -256,15 +287,7 @@ def plot_final_solutions_extended(solutions):
     plt.show()
 
 
-def plot_final_solutions(solutions):
-    """
-    solutions = {
-        "TR Exact": x_tr_exact,
-        "TR BFGS": x_tr_bfgs,
-        "LS Exact": x_ls_exact,
-        "LS BFGS": x_ls_bfgs
-    }
-    """
+def plot_final_solutions(solutions, constraints):
     plt.figure(figsize=(7,6))
 
     # Rosenbrock contours
@@ -274,10 +297,10 @@ def plot_final_solutions(solutions):
     Z = (1 - X1)**2 + 100*(X2 - X1**2)**2
     plt.contour(X1, X2, Z, levels=50, cmap="viridis")
 
-    # Constraints
-    c1 = (X1 + 2)**2 - X2
-    c2 = -4*X1 + 10*X2
-    infeasible = (c1 < 0) | (c2 < 0)
+    # Generic infeasible region from ConstraintSet
+    infeasible = np.zeros_like(X1, dtype=bool)
+    for ci in constraints.funcs:
+        infeasible |= (ci(np.array([X1, X2])) < 0)
 
     plt.imshow(
         infeasible.astype(int),
@@ -302,24 +325,32 @@ def plot_final_solutions(solutions):
 
 
 if __name__ == "__main__":
-    xl = np.array([-2.0, -1.0])
-    xu = np.array([ 2.0,  3.0])
-    x0 = np.array([-1.2, 1.0])
 
-    gl = np.array([0.0, 0.0])
-    gu = np.array([np.inf, np.inf])
+    #constraints = rosen_constraints
+    constraints = inverted_circle
+    c_obj_fun, jac_c_obj_fun, hess_c_obj_fun = unpack_constraints(constraints)
+
+    xl = np.array([-5.0, -5.0])
+    xu = np.array([ 5.0,  5.0])
+    x0 = np.array([0,0])
+    # x0 = np.array([-1.2, 1.0])
+
+    gl = constraints.gl
+    gu = constraints.gu
+    #np.array([0.0, 0.0])
+    #gu = np.array([np.inf, np.inf])
 
     
     # --- 1. Trust Region SQP (Exact) ---
     start_tr_exact = time.perf_counter()
     x_tr_exact, f_tr_exact, hist_tr_exact = tr_sqp(
         obj_fun=rosenbrock, 
-        grad_obj_fun=grad_rosenbrock, 
-        hess_obj_fun=hess_rosenbrock, 
-        hess_c_obj_fun=hess_c_rosenbrock, 
-        c_obj_fun=c_rosenbrock, 
-        jac_c_obj_fun=jac_c_rosenbrock,
-        x0=x0, xl=xl, xu=xu, gl=gl, gu=gu, hessian_mode="exact"
+    grad_obj_fun=grad_rosenbrock, 
+    hess_obj_fun=hess_rosenbrock, 
+    hess_c_obj_fun=hess_c_obj_fun, 
+    c_obj_fun=c_obj_fun, 
+    jac_c_obj_fun=jac_c_obj_fun,
+        x0=x0, xl=xl, xu=xu, gl=gl, gu=gu, hessian_mode="exact",max_iter=50
     )
     time_tr_exact = time.perf_counter() - start_tr_exact
 
@@ -327,12 +358,12 @@ if __name__ == "__main__":
     start_tr_bfgs = time.perf_counter()
     x_tr_bfgs, f_tr_bfgs, hist_tr_bfgs = tr_sqp(
         obj_fun=rosenbrock, 
-        grad_obj_fun=grad_rosenbrock, 
-        hess_obj_fun=hess_rosenbrock, 
-        hess_c_obj_fun=hess_c_rosenbrock, 
-        c_obj_fun=c_rosenbrock, 
-        jac_c_obj_fun=jac_c_rosenbrock,
-        x0=x0, xl=xl, xu=xu, gl=gl, gu=gu, hessian_mode="bfgs"
+    grad_obj_fun=grad_rosenbrock, 
+    hess_obj_fun=hess_rosenbrock, 
+    hess_c_obj_fun=hess_c_obj_fun, 
+    c_obj_fun=c_obj_fun, 
+    jac_c_obj_fun=jac_c_obj_fun,
+        x0=x0, xl=xl, xu=xu, gl=gl, gu=gu, hessian_mode="bfgs", max_iter=50
     )
     time_tr_bfgs = time.perf_counter() - start_tr_bfgs
 
@@ -340,11 +371,11 @@ if __name__ == "__main__":
     start_ls_exact = time.perf_counter()
     x_ls_exact, f_ls_exact, hist_ls_exact = line_search_sqp(
         obj_fun=rosenbrock, 
-        grad_obj_fun=grad_rosenbrock, 
-        hess_obj_fun=hess_rosenbrock, 
-        hess_c_obj_fun=hess_c_rosenbrock, 
-        c_obj_fun=c_rosenbrock, 
-        jac_c_obj_fun=jac_c_rosenbrock,
+    grad_obj_fun=grad_rosenbrock, 
+    hess_obj_fun=hess_rosenbrock, 
+    hess_c_obj_fun=hess_c_obj_fun, 
+    c_obj_fun=c_obj_fun, 
+    jac_c_obj_fun=jac_c_obj_fun,
         x0=x0, xl=xl, xu=xu, gl=gl, gu=gu, hessian_mode="exact"
     )
     time_ls_exact = time.perf_counter() - start_ls_exact
@@ -353,35 +384,37 @@ if __name__ == "__main__":
     start_ls_bfgs = time.perf_counter()
     x_ls_bfgs, f_ls_bfgs, hist_ls_bfgs = line_search_sqp(
         obj_fun=rosenbrock, 
-        grad_obj_fun=grad_rosenbrock, 
-        hess_obj_fun=hess_rosenbrock, 
-        hess_c_obj_fun=hess_c_rosenbrock, 
-        c_obj_fun=c_rosenbrock, 
-        jac_c_obj_fun=jac_c_rosenbrock,
+    grad_obj_fun=grad_rosenbrock, 
+    hess_obj_fun=hess_rosenbrock, 
+    hess_c_obj_fun=hess_c_obj_fun, 
+    c_obj_fun=c_obj_fun, 
+    jac_c_obj_fun=jac_c_obj_fun,
         x0=x0, xl=xl, xu=xu, gl=gl, gu=gu, hessian_mode="bfgs"
     )
     time_ls_bfgs = time.perf_counter() - start_ls_bfgs
 
     # --- 5. IPOPT ---
     start_ipopt = time.perf_counter()
-    x_ipopt, f_ipopt = solve_with_ipopt(x0, gl, gu)
+    x_ipopt, f_ipopt = solve_with_ipopt(x0, constraints, xl, xu)
+
     time_ipopt = time.perf_counter() - start_ipopt
 
     # --- 6. trust-constr ---
     start_tc = time.perf_counter()
-    x_tc, f_tc = solve_with_trust_constr(x0)
+    x_tc, f_tc = solve_with_trust_constr(x0, constraints, xl, xu)
     time_tc = time.perf_counter() - start_tc
 
 
     # --- Plots ---
     print("\nTrust Region SQP (Rosenbrock)")
     plot_convergence_compare(hist_tr_exact, hist_tr_bfgs)
-    plot_paths(hist_tr_exact, hist_tr_bfgs)
+    plot_paths(hist_tr_exact, hist_tr_bfgs, constraints)
+
 
     print("\nLine Search SQP (Rosenbrock)")
+    plot_paths(hist_ls_exact, hist_ls_bfgs, constraints)
     plot_convergence_compare(hist_ls_exact, hist_ls_bfgs)
-    plot_paths(hist_ls_exact, hist_ls_bfgs)
-
+    
     # --- Summary ---
     print("\n" + "="*60)
     print("                SOLVER BENCHMARK RESULTS (ROSENBROCK)")
@@ -426,7 +459,7 @@ if __name__ == "__main__":
     "LS BFGS": x_ls_bfgs
     }
 
-    plot_final_solutions(solutions)
+    plot_final_solutions(solutions,constraints)
     plot_cpu_times(time_tr_exact, time_tr_bfgs, time_ls_exact, time_ls_bfgs)
 
     times_dict = {
@@ -448,7 +481,7 @@ if __name__ == "__main__":
         "trust-constr": x_tc
     }
 
-    plot_final_solutions_extended(solutions)
+    plot_final_solutions_extended(solutions,constraints)
 
 
 

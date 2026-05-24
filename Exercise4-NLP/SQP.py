@@ -3,6 +3,37 @@ from scipy import sparse
 import numpy as np
 
 
+
+
+class ConstraintSet:
+    def __init__(self, funcs, jacs, hessians, gl=None, gu=None):
+        self.funcs = funcs
+        self.jacs = jacs
+        self.hessians = hessians
+        self.gl = np.array(gl) if gl is not None else None
+        self.gu = np.array(gu) if gu is not None else None
+
+    def c(self, x):
+        return np.array([f(x) for f in self.funcs])
+
+    def jac(self, x):
+        return np.array([J(x) for J in self.jacs])
+
+    def hess(self, x):
+        return np.array([H(x) for H in self.hessians])
+
+def unpack_constraints(constraints: ConstraintSet):
+    def c_obj_fun(x):
+        return constraints.c(x)
+
+    def jac_c_obj_fun(x):
+        return constraints.jac(x)
+
+    def hess_c_obj_fun(x):
+        return constraints.hess(x)
+
+    return c_obj_fun, jac_c_obj_fun, hess_c_obj_fun
+
 def damped_bfgs_update(Bk, s, y):
 
     Bs = Bk @ s
@@ -105,10 +136,10 @@ def line_search_sqp(
     x0,
     xl,
     xu,
+    hess_obj_fun=None,
     gl=[0.0, 0.0],
     gu=[np.inf, np.inf],
     hessian_mode="exact",
-    hess_obj_fun=None,
     max_iter=100,
     tol=1e-8
 ):
@@ -118,6 +149,7 @@ def line_search_sqp(
         s.t. gl <= g(x) <= gu
              xl <= x <= xu
     """
+
 
     history = {"f": [], "x": []}
 
