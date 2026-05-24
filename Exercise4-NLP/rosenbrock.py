@@ -326,8 +326,8 @@ def plot_final_solutions(solutions, constraints):
 
 if __name__ == "__main__":
 
-    #constraints = rosen_constraints
-    constraints = inverted_circle
+    constraints = rosen_constraints
+    #constraints = inverted_circle
     c_obj_fun, jac_c_obj_fun, hess_c_obj_fun = unpack_constraints(constraints)
 
     xl = np.array([-5.0, -5.0])
