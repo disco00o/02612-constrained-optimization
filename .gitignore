@@ -5,3 +5,7 @@ Matlab/plotEQPgrad.m
 Matlab/plotEQP.m
 .vscode/settings.json
 *.pyc
+Exercise1-EQP/EQP_visualizer.m
+Exercise1-EQP/plotEQPgrad.m
+Exercise1-EQP/plotEQP.m
+Matlab/EQP.mlx
